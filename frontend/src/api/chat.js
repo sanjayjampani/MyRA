@@ -1,0 +1,180 @@
+import { readSseJsonStream } from "./sse";
+import { deviceId } from "./auth";
+
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:2020";
+
+const authHeaders = () => {
+  const token = localStorage.getItem("myra_auth_token");
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    "X-MyRa-Device": deviceId(),
+  };
+};
+
+export const chatApi = {
+  sendMessage: async (
+    message,
+    conversationId = null,
+    modelSelection = null,
+    sources = null,
+  ) => {
+    const response = await fetch(`${API_BASE_URL}/chat/message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      credentials: "include",
+      body: JSON.stringify({
+        message,
+        conversationId,
+        provider: modelSelection?.provider,
+        model: modelSelection?.model,
+        sources,
+      }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const error = new Error(data.error || `Chat request failed: ${response.status}`);
+      error.data = data;
+      throw error;
+    }
+
+    return response.json();
+  },
+
+  sendMessageStream: async (
+    message,
+    conversationId = null,
+    modelSelection = null,
+    { onEvent, signal, sources } = {},
+  ) => {
+    const response = await fetch(`${API_BASE_URL}/chat/message/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      credentials: "include",
+      signal,
+      body: JSON.stringify({
+        message,
+        conversationId,
+        provider: modelSelection?.provider,
+        model: modelSelection?.model,
+        sources,
+      }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const error = new Error(data.error || `Chat request failed: ${response.status}`);
+      error.data = data;
+      error.status = response.status;
+      throw error;
+    }
+
+    return readSseJsonStream(response.body, { onEvent });
+  },
+
+  createConversation: async () => {
+    const response = await fetch(`${API_BASE_URL}/chat/conversation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to create conversation: ${response.status}`);
+    }
+
+    return response.json();
+  },
+
+  getHistory: async (conversationId, limit = 50) => {
+    const response = await fetch(
+      `${API_BASE_URL}/chat/history/${conversationId}?limit=${limit}`,
+      {
+        method: "GET",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        credentials: "include",
+      }
+    );
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const error = new Error(data.error || `Failed to fetch history: ${response.status}`);
+      error.data = data;
+      error.status = response.status;
+      throw error;
+    }
+
+    return response.json();
+  },
+
+  getConversations: async () => {
+    const response = await fetch(`${API_BASE_URL}/chat/conversations`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch conversations: ${response.status}`);
+    }
+
+    return response.json();
+  },
+
+  deleteConversation: async (conversationId) => {
+    const response = await fetch(`${API_BASE_URL}/chat/conversation/${conversationId}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const error = new Error(data.error || `Failed to delete conversation: ${response.status}`);
+      error.data = data;
+      error.status = response.status;
+      throw error;
+    }
+
+    return response.json();
+  },
+
+  sendVoiceMessage: async ({
+    audio,
+    conversationId = null,
+    language = "en-IN",
+    durationMs = null,
+    wakeWord = null,
+  }) => {
+    const bytes = new Uint8Array(await audio.arrayBuffer());
+    let binary = "";
+    for (let index = 0; index < bytes.length; index += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+    }
+
+    const voicePath = import.meta.env.VITE_VOICE_CHAT_PATH || "/api/voice-chat";
+    const response = await fetch(`${API_BASE_URL}${voicePath}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      credentials: "include",
+      body: JSON.stringify({
+        audioBase64: btoa(binary),
+        mimeType: audio.type || "audio/webm",
+        ...(conversationId ? { conversationId } : {}),
+        ...(language ? { language } : {}),
+        ...(durationMs !== null ? { durationMs } : {}),
+        ...(wakeWord ? { wakeWord } : {}),
+      }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const error = new Error(data.error || `Voice chat request failed: ${response.status}`);
+      error.data = data;
+      throw error;
+    }
+
+    return response.json();
+  },
+};

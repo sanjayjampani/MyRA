@@ -1,0 +1,406 @@
+import { useState, useRef, useEffect } from "react";
+import { useAuthStore } from "../../store/authStore";
+import { useChatStore } from "../../store/chatStore";
+import useSyncStore from "../../store/syncStore";
+import { authApi } from "../../api/auth";
+import {
+  BarChart3,
+  CalendarDays,
+  Home,
+  LoaderCircle,
+  LogOut,
+  MessageCircle,
+  PanelLeft,
+  Plus,
+  Settings,
+  Trash2,
+  UserRound,
+} from "lucide-react";
+
+function Sidebar({ onNavigate, currentPage, isExpanded = true, onToggle, isMobile = false }) {
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const { user, isAuthenticated, logout } = useAuthStore();
+  const {
+    conversations, conversationsLoading, conversationsError,
+    loadConversations, loadConversation, conversationId, resetChat, deleteConversation,
+  } = useChatStore();
+  const { calendar, triggerCalendarSync } = useSyncStore();
+  const profileMenuRef = useRef(null);
+  const [deletingConversationId, setDeletingConversationId] = useState(null);
+
+  useEffect(() => {
+    if (isAuthenticated) loadConversations();
+  }, [isAuthenticated, loadConversations]);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
+        setShowProfileMenu(false);
+      }
+    };
+    if (showProfileMenu) document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showProfileMenu]);
+
+  const getInitials = (name) => {
+    if (!name) return "U";
+    return name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
+  };
+
+  const handleProfileClick = () => {
+    if (isAuthenticated) setShowProfileMenu(!showProfileMenu);
+    else onNavigate("login");
+  };
+
+  const handleLogout = async () => {
+    try {
+      await authApi.logout();
+      logout();
+      setShowProfileMenu(false);
+      onNavigate("login");
+    } catch (error) {
+      console.error("Logout error:", error);
+    }
+  };
+
+  const handleCalendarSync = async () => {
+    if (!user?.id || calendar.isSyncing) return;
+    try {
+      await triggerCalendarSync(user.id, "incremental");
+    } catch (error) {
+      console.error("Calendar sync error:", error);
+    }
+  };
+
+  const handleDeleteConversation = async (targetConversationId) => {
+    if (!targetConversationId || deletingConversationId) return;
+    setDeletingConversationId(targetConversationId);
+    try {
+      await deleteConversation(targetConversationId);
+    } catch (error) {
+      console.error("Delete conversation error:", error);
+    } finally {
+      setDeletingConversationId(null);
+    }
+  };
+
+  // Group conversations by recency
+  const grouped = groupConversations(conversations);
+
+  const iconOnly = !isExpanded;
+
+  return (
+    <div className={"myra-sidebar" + (iconOnly ? " icon-only" : "") + (isMobile && isExpanded ? " mobile-open" : "")}>
+      {/* Header */}
+      <div className="myra-sidebar-header">
+        {!iconOnly && (
+          <button
+            style={{ background: "none", border: 0, cursor: "pointer", padding: 0 }}
+            onClick={() => onNavigate("home")}
+            aria-label="Home"
+          >
+            <Logo />
+          </button>
+        )}
+        <button
+          className="myra-btn ghost icon sm"
+          onClick={onToggle}
+          title={isExpanded ? "Collapse sidebar" : "Expand sidebar"}
+          aria-label={isExpanded ? "Collapse sidebar" : "Expand sidebar"}
+        >
+          <PanelLeft size={16} strokeWidth={1.7} />
+        </button>
+      </div>
+
+      {/* New Chat */}
+      <div className="myra-sidebar-newchat">
+        <button
+          className="myra-btn primary"
+          style={{ width: "100%" }}
+          onClick={() => { resetChat(); onNavigate("chat"); }}
+        >
+          <Plus size={16} strokeWidth={1.7} />
+          <span className="sidebar-newchat-text">New chat</span>
+        </button>
+      </div>
+
+      {/* Main nav links */}
+      <div style={{ margin: "0 12px 4px" }}>
+        {[
+          { id: "home",  label: "Home",  icon: <Home size={16} strokeWidth={1.7} /> },
+          { id: "chat",  label: "Chat",  icon: <MessageCircle size={16} strokeWidth={1.7} /> },
+          { id: "stats", label: "Usage", icon: <BarChart3 size={16} strokeWidth={1.7} /> },
+        ].map(({ id, label, icon }) => (
+          <button
+            key={id}
+            className={"myra-sidebar-item" + (currentPage === id ? " active" : "")}
+            style={{ borderLeft: "none", marginLeft: 0, width: "100%" }}
+            onClick={() => onNavigate(id)}
+            title={label}
+          >
+            {icon}
+            <span className="item-title">{label}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Calendar Sync button */}
+      {isAuthenticated && (
+        <div style={{ margin: "0 12px 8px" }}>
+          <button
+            onClick={handleCalendarSync}
+            disabled={calendar.isSyncing}
+            className="myra-sidebar-item"
+            style={{ borderLeft: "none", marginLeft: 0, width: "100%" }}
+            title={calendar.isSyncing ? "Syncing…" : "Sync Calendar"}
+          >
+            {calendar.isSyncing
+              ? <LoaderCircle className="myra-spin" size={16} strokeWidth={1.7} />
+              : <CalendarDays size={16} strokeWidth={1.7} />}
+            <span className="item-title">
+              {calendar.isSyncing
+                ? (calendar.syncMessage || "Syncing…")
+                : calendar.syncPhase === "complete"
+                ? "Calendar synced"
+                : calendar.syncPhase === "error"
+                ? "Sync failed — retry"
+                : "Sync Calendar"}
+            </span>
+          </button>
+        </div>
+      )}
+
+      {/* Chat History */}
+      <div className="myra-sidebar-list">
+        {isAuthenticated ? (
+          conversationsLoading ? (
+            !iconOnly && (
+              <div style={{ padding: "8px 4px", display: "flex", flexDirection: "column", gap: 6 }}>
+                {[1, 2, 3].map((i) => (
+                  <div
+                    key={i}
+                    style={{
+                      height: 32, borderRadius: "var(--radius-md)",
+                      background: "var(--bg-2)",
+                      animation: "myra-fade-in .6s ease infinite alternate",
+                    }}
+                  />
+                ))}
+              </div>
+            )
+          ) : conversationsError ? (
+            !iconOnly && (
+              <div style={{ padding: "8px 12px" }}>
+                <p style={{ fontSize: 12, color: "var(--danger)", marginBottom: 4 }}>Failed to load history</p>
+                <button
+                  onClick={loadConversations}
+                  style={{ fontSize: 12, color: "var(--accent)", background: "none", border: 0, cursor: "pointer" }}
+                >
+                  Retry
+                </button>
+              </div>
+            )
+          ) : (
+            <>
+              {grouped.today.length > 0 && (
+                <>
+                  {!iconOnly && <div className="myra-sidebar-section-label">Today</div>}
+                  {grouped.today.map((c) => (
+                    <ConversationItem
+                      key={c.conversationId}
+                      chat={c}
+                      isActive={c.conversationId === conversationId}
+                      iconOnly={iconOnly}
+                      onSelect={() => { loadConversation(c.conversationId); onNavigate("chat"); }}
+                      onDelete={() => handleDeleteConversation(c.conversationId)}
+                      isDeleting={deletingConversationId === c.conversationId}
+                    />
+                  ))}
+                </>
+              )}
+              {grouped.week.length > 0 && (
+                <>
+                  {!iconOnly && <div className="myra-sidebar-section-label">This week</div>}
+                  {grouped.week.map((c) => (
+                    <ConversationItem
+                      key={c.conversationId}
+                      chat={c}
+                      isActive={c.conversationId === conversationId}
+                      iconOnly={iconOnly}
+                      onSelect={() => { loadConversation(c.conversationId); onNavigate("chat"); }}
+                      onDelete={() => handleDeleteConversation(c.conversationId)}
+                      isDeleting={deletingConversationId === c.conversationId}
+                    />
+                  ))}
+                </>
+              )}
+              {grouped.earlier.length > 0 && (
+                <>
+                  {!iconOnly && <div className="myra-sidebar-section-label">Earlier</div>}
+                  {grouped.earlier.map((c) => (
+                    <ConversationItem
+                      key={c.conversationId}
+                      chat={c}
+                      isActive={c.conversationId === conversationId}
+                      iconOnly={iconOnly}
+                      onSelect={() => { loadConversation(c.conversationId); onNavigate("chat"); }}
+                      onDelete={() => handleDeleteConversation(c.conversationId)}
+                      isDeleting={deletingConversationId === c.conversationId}
+                    />
+                  ))}
+                </>
+              )}
+              {conversations.length === 0 && !iconOnly && (
+                <p style={{ fontSize: 12, color: "var(--text-muted)", padding: "16px 12px", textAlign: "center" }}>
+                  No chat history yet
+                </p>
+              )}
+            </>
+          )
+        ) : (
+          !iconOnly && (
+            <div style={{ padding: "16px 12px", textAlign: "center" }}>
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>
+                Sign in to save your chat history
+              </p>
+              <button
+                onClick={() => onNavigate("login")}
+                className="myra-btn ghost sm"
+              >
+                Sign in
+              </button>
+            </div>
+          )
+        )}
+      </div>
+
+      {/* Footer with profile */}
+      <div className="myra-sidebar-footer" ref={profileMenuRef} style={{ position: "relative" }}>
+        <button
+          className={"myra-sidebar-item" + (currentPage === "settings" ? " active" : "")}
+          onClick={() => onNavigate("settings")}
+          title="Settings"
+        >
+          <Settings size={16} strokeWidth={1.7} />
+          {!iconOnly && <span className="item-title">Settings</span>}
+        </button>
+        <button
+          className="myra-sidebar-item"
+          style={{ borderLeft: "none", marginLeft: 0, width: "100%", padding: "0 10px" }}
+          onClick={handleProfileClick}
+          title={isAuthenticated && user ? user.name : "Sign in"}
+        >
+          <div className="myra-avatar sm" style={{ flexShrink: 0 }}>
+            {isAuthenticated && user?.picture
+              ? <img src={user.picture} alt={user.name || "Profile"} onError={(e) => { e.target.style.display = "none"; }} />
+              : <span>{isAuthenticated && user ? getInitials(user.name) : <UserRound size={14} strokeWidth={1.7} />}</span>}
+          </div>
+          {!iconOnly && (
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text-2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span className="sidebar-user-name">
+                  {isAuthenticated && user ? user.name : "Sign in"}
+                </span>
+              </div>
+              {isAuthenticated && user?.email && (
+                <div style={{ fontSize: 11, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {user.email}
+                </div>
+              )}
+            </div>
+          )}
+        </button>
+
+        {/* Profile dropdown */}
+        {showProfileMenu && isAuthenticated && (
+          <div className="myra-profile-menu">
+            <button
+              className="myra-profile-menu-item"
+              onClick={() => { setShowProfileMenu(false); onNavigate("profile"); }}
+            >
+              <Settings size={16} strokeWidth={1.7} /> Settings &amp; Profile
+            </button>
+            <button
+              className="myra-profile-menu-item danger"
+              onClick={handleLogout}
+            >
+              <LogOut size={16} strokeWidth={1.7} /> Log out
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Conversation item ────────────────────────────────────────────────────────
+
+function ConversationItem({ chat, isActive, iconOnly, onSelect, onDelete, isDeleting }) {
+  const handleKeyDown = (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelect();
+    }
+  };
+
+  return (
+    <div
+      className={"myra-sidebar-item myra-sidebar-chat-item" + (isActive ? " active" : "")}
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={handleKeyDown}
+      title={chat.title}
+    >
+      <MessageCircle size={16} strokeWidth={1.7} />
+      <span className="item-title">{chat.title}</span>
+      {!iconOnly && (
+        <button
+          className="myra-sidebar-chat-delete"
+          type="button"
+          aria-label={`Delete ${chat.title}`}
+          title="Delete chat"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+          onKeyDown={(event) => event.stopPropagation()}
+          disabled={isDeleting}
+        >
+          {isDeleting
+            ? <LoaderCircle className="myra-spin" size={14} strokeWidth={1.8} />
+            : <Trash2 size={14} strokeWidth={1.8} />}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function groupConversations(conversations) {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const weekStart = new Date(todayStart);
+  weekStart.setDate(todayStart.getDate() - 7);
+
+  const today = [], week = [], earlier = [];
+  for (const c of conversations) {
+    const d = new Date(c.updatedAt || c.createdAt || 0);
+    if (d >= todayStart) today.push(c);
+    else if (d >= weekStart) week.push(c);
+    else earlier.push(c);
+  }
+  return { today, week, earlier };
+}
+
+function Logo() {
+  return (
+    <div className="myra-logo sm">
+      <span className="mark">R</span>
+      <span className="word">MyRa</span>
+    </div>
+  );
+}
+
+export default Sidebar;
